@@ -1,0 +1,77 @@
+#!/bin/zsh
+# killname — kill a process by searching for a name substring, handling ambiguity and stubborn processes.
+
+# ---------------------------------------------------------------------------
+# Print usage if no argument provided
+if [[ -z "$1" ]]; then
+    echo "Usage: killname <name_substring>"
+    echo "Kills the process whose command line contains the given substring."
+    echo "If multiple matches, shows them but kills nothing."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Gather matching processes (excluding the grep and this script itself)
+# - 'ps -axo pid=,command=' avoids headers and trims leading whitespace in PID
+# - grep for name substring, ignore grep and the script itself
+matches=("${(@f)$(ps -axo pid=,command= | grep -i -- "$1" | grep -v grep | grep -v "$0")}")
+
+# ---------------------------------------------------------------------------
+# No matches found
+if [[ ${#matches[@]} -eq 0 ]] || [[ -z "${matches[1]}" ]]; then
+    echo "No matching processes found for '$1'."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Multiple matches found
+if [[ ${#matches[@]} -gt 1 ]]; then
+    echo "Multiple matches found for '$1':"
+    for line in $matches; do
+        echo "$line"
+    done
+    echo "Nothing killed."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Exactly one match found — extract pid safely using awk
+match="$matches[1]"
+if [[ -z "$match" ]]; then
+    echo "Internal error: found empty match line."
+    exit 1
+fi
+pid=$(echo "$match" | awk '{print $1}')
+
+# ---------------------------------------------------------------------------
+# Validate pid is numeric and not empty
+if [[ -z "$pid" ]] || ! [[ "$pid" =~ '^[0-9]+$' ]]; then
+    echo "Could not determine PID. No process to kill. (Line: $match)"
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Kill the process and wait up to 5 seconds for it to exit, then force kill if needed
+echo "Killing pid $pid: $match"
+kill "$pid"
+
+for i in {1..5}; do
+    sleep 1
+    if ! ps -p "$pid" >/dev/null; then
+        echo "Process $pid exited cleanly."
+        exit 0
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Force kill if process did not exit
+echo "Process $pid did not exit, sending SIGKILL..."
+kill -9 "$pid"
+sleep 1
+
+if ! ps -p "$pid" >/dev/null; then
+    echo "Process $pid was killed with SIGKILL."
+else
+    echo "Warning: Process $pid could not be killed."
+    exit 1
+fi
